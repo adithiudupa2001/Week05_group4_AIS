@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   CloudSun,
   Search,
@@ -12,7 +12,9 @@ import {
   CheckCircle2,
   Star,
   MapPin,
-  Radio
+  X,
+  RotateCcw,
+  ArrowRight
 } from 'lucide-react';
 
 interface DirectService {
@@ -53,7 +55,10 @@ interface OneChangeOption {
 
 interface RouteSearchResponse {
   from: string;
+  fromDescription?: string;
+  fromRoadName?: string;
   destination: string;
+  destinationDescription?: string;
   type?: 'direct' | 'one_change' | 'none';
   services?: DirectService[];
   directServices?: DirectService[];
@@ -68,21 +73,48 @@ interface WeatherData {
   valid_period: string;
 }
 
-interface QuickStop {
+interface KnownStop {
   code: string;
   name: string;
+  road?: string;
+  hint?: string;
   lat: number;
   lng: number;
-  hint: string;
 }
 
-const POPULAR_QUICK_STOPS: QuickStop[] = [
-  { code: '77009', name: 'Pasir Ris Int', lat: 1.3801, lng: 103.9493, hint: 'Shelter Hub' },
-  { code: '77031', name: 'Opp Pasir Ris Stn', lat: 1.3734, lng: 103.9482, hint: 'MRT Exit B' },
-  { code: '75009', name: 'Tampines Int', lat: 1.3533, lng: 103.9452, hint: 'Direct Hub' },
-  { code: '84009', name: 'Bedok Int', lat: 1.3243, lng: 103.9304, hint: 'East Coast' },
-  { code: '98011', name: 'Loyang Pt', lat: 1.3705, lng: 103.9658, hint: 'Near Loyang' }
+// Curated Singapore Transit Hubs for instant recognition & nearby geolocation
+const POPULAR_QUICK_STOPS: KnownStop[] = [
+  { code: '77009', name: 'Pasir Ris Int', road: 'Pasir Ris Dr 3', hint: 'Shelter Hub', lat: 1.3801, lng: 103.9493 },
+  { code: '77031', name: 'Opp Pasir Ris Stn', road: 'Pasir Ris Ctrl', hint: 'MRT Exit B', lat: 1.3734, lng: 103.9482 },
+  { code: '75009', name: 'Tampines Int', road: 'Tampines Ctrl 1', hint: 'Direct Hub', lat: 1.3533, lng: 103.9452 },
+  { code: '84009', name: 'Bedok Int', road: 'Bedok North Ave 1', hint: 'East Coast', lat: 1.3243, lng: 103.9304 },
+  { code: '98011', name: 'Loyang Pt', road: 'Loyang Ave', hint: 'Loyang Hub', lat: 1.3705, lng: 103.9658 },
+  { code: '65009', name: 'Punggol Temp Int', road: 'Punggol Pl', hint: 'Northeast', lat: 1.4042, lng: 103.9022 }
 ];
+
+// Offline fallback dictionary of known Singapore transit stops for instant recognition
+const KNOWN_STOP_NAMES: Record<string, { name: string; road?: string }> = {
+  '77009': { name: 'Pasir Ris Interchange', road: 'Pasir Ris Dr 3' },
+  '77031': { name: 'Opposite Pasir Ris Station', road: 'Pasir Ris Ctrl' },
+  '77039': { name: 'Pasir Ris Station', road: 'Pasir Ris Ctrl' },
+  '75009': { name: 'Tampines Bus Interchange', road: 'Tampines Ctrl 1' },
+  '84009': { name: 'Bedok Bus Interchange', road: 'Bedok North Ave 1' },
+  '98011': { name: 'Loyang Point', road: 'Loyang Ave' },
+  '98019': { name: 'Opposite Loyang Point', road: 'Loyang Ave' },
+  '65009': { name: 'Punggol Temporary Interchange', road: 'Punggol Place' },
+  '67009': { name: 'Sengkang Bus Interchange', road: 'Sengkang Sq' },
+  '04121': { name: 'Opposite The Treasury', road: 'North Bridge Rd' },
+  '04111': { name: 'Grand Park City Hall', road: 'Coleman St' },
+  '03019': { name: 'Apollo Centre', road: 'Havelock Rd' },
+  '08057': { name: 'Dhoby Ghaut Station', road: 'Orchard Rd' },
+  '09048': { name: 'Orchard Station / Lucky Plaza', road: 'Orchard Rd' },
+  '28009': { name: 'Jurong East Bus Interchange', road: 'Jurong Gateway Rd' },
+  '46009': { name: 'Woodlands Temporary Interchange', road: 'Woodlands Sq' },
+  '59009': { name: 'Yishun Bus Interchange', road: 'Yishun Ave 2' },
+  '53009': { name: 'Bishan Bus Interchange', road: 'Bishan Place' },
+  '52009': { name: 'Ang Mo Kio Interchange', road: 'Ang Mo Kio Ave 8' },
+  '76009': { name: 'Tampines Concourse Interchange', road: 'Tampines Concourse' }
+};
 
 export const ShelterVisitPlanningSection: React.FC = () => {
   // Panel A: Weather State
@@ -100,6 +132,9 @@ export const ShelterVisitPlanningSection: React.FC = () => {
   const [routesError, setRoutesError] = useState<string | null>(null);
   const [routeResult, setRouteResult] = useState<RouteSearchResponse | null>(null);
 
+  // Category view for Quick Stops / Favourites / Recent
+  const [stopsCategory, setStopsCategory] = useState<'quick' | 'favorites' | 'recent'>('quick');
+
   // Geolocation & Quick Stops State
   const [locationStatus, setLocationStatus] = useState<'idle' | 'locating' | 'success' | 'error'>('idle');
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
@@ -108,11 +143,46 @@ export const ShelterVisitPlanningSection: React.FC = () => {
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('paws_fav_stops');
-      return saved ? JSON.parse(saved) : ['77009'];
+      return saved ? JSON.parse(saved) : ['77009', '75009'];
     } catch {
-      return ['77009'];
+      return ['77009', '75009'];
     }
   });
+
+  // Recent stops (stored in localStorage)
+  const [recentStops, setRecentStops] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('paws_recent_stops');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Undo accidental removal of favorite
+  const [undoRemoval, setUndoRemoval] = useState<{ code: string; name: string } | null>(null);
+  const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper to get prominent stop name and secondary detail
+  const getStopDisplay = (code: string, desc?: string, road?: string): { name: string; roadInfo: string } => {
+    if (desc && desc.trim()) {
+      return {
+        name: desc.trim(),
+        roadInfo: road && road.trim() ? road.trim() : ''
+      };
+    }
+    if (KNOWN_STOP_NAMES[code]) {
+      const k = KNOWN_STOP_NAMES[code];
+      return {
+        name: k.name,
+        roadInfo: k.road || ''
+      };
+    }
+    return {
+      name: `Bus Stop ${code}`,
+      roadInfo: ''
+    };
+  };
 
   // Relative timestamp calculation for last updated
   const calculateRelativeTime = (date: Date | null): string => {
@@ -163,17 +233,24 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     return () => clearInterval(weatherInterval);
   }, [fetchWeather]);
 
-  // Perform route and arrival search
+  // Perform route and arrival search with duplicate prevention and error prevention
   const performSearch = async (code: string, isBackgroundRefresh = false) => {
     const cleanCode = code.trim();
+
+    // Error Prevention: Ensure input is exactly 5 numeric digits
     if (!cleanCode) {
       setRoutesError('Please enter a 5-digit bus stop code.');
       return;
     }
 
     if (!/^\d{5}$/.test(cleanCode)) {
-      setRoutesError('A Singapore stop code must be exactly 5 digits (e.g. 04121).');
+      setRoutesError('A Singapore bus stop code must be exactly 5 digits (e.g. 04121).');
       return;
+    }
+
+    // Prevent duplicate action: If already displaying this stop with current data and user taps search, refresh instead
+    if (!isBackgroundRefresh && routeResult && routeResult.from === cleanCode && !routesError) {
+      isBackgroundRefresh = true;
     }
 
     if (isBackgroundRefresh) {
@@ -197,6 +274,17 @@ export const ShelterVisitPlanningSection: React.FC = () => {
       setLastUpdated(updateDate);
       setUpdatedTimeText('Updated just now');
 
+      // Save to recent searches (Recognition rather than recall)
+      setRecentStops((prev) => {
+        const next = [cleanCode, ...prev.filter((c) => c !== cleanCode)].slice(0, 4);
+        try {
+          localStorage.setItem('paws_recent_stops', JSON.stringify(next));
+        } catch {
+          // ignore localStorage failure
+        }
+        return next;
+      });
+
       if (isBackgroundRefresh) {
         setJustRefreshed(true);
         setTimeout(() => setJustRefreshed(false), 3000);
@@ -212,16 +300,33 @@ export const ShelterVisitPlanningSection: React.FC = () => {
 
   const handleSearchRoutes = (e: React.FormEvent) => {
     e.preventDefault();
+    if (routesLoading || isRefreshing) return;
     performSearch(stopCodeInput);
   };
 
+  // Error Prevention: Strict input sanitation (digits only, max 5)
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const digitsOnly = raw.replace(/\D/g, '').slice(0, 5);
+    setStopCodeInput(digitsOnly);
+    if (routesError) setRoutesError(null);
+  };
+
+  const handleClearInput = () => {
+    setStopCodeInput('');
+    setRoutesError(null);
+  };
+
   const handleSelectQuickStop = (code: string) => {
+    if (routesLoading || isRefreshing) return;
     setStopCodeInput(code);
     performSearch(code);
   };
 
   // Nearby Stops Geolocation
   const handleLocateNearbyStops = () => {
+    if (locationStatus === 'locating') return;
+
     if (!navigator.geolocation) {
       setLocationStatus('error');
       setLocationMessage('Location access is not supported by your browser. Please enter a 5-digit stop code below.');
@@ -256,27 +361,71 @@ export const ShelterVisitPlanningSection: React.FC = () => {
       (err) => {
         setLocationStatus('error');
         if (err.code === 1) {
-          setLocationMessage('Location access was denied. Enter a 5-digit stop code below or choose a quick stop.');
+          setLocationMessage('Location permission denied. Enter a 5-digit stop code below or choose from quick stops.');
+        } else if (err.code === 2) {
+          setLocationMessage('Location unavailable. Check GPS connection or select a quick stop below.');
         } else {
-          setLocationMessage('Unable to determine location. Please select a quick stop or enter a 5-digit code.');
+          setLocationMessage('Location request timed out. Select a quick stop below or enter a 5-digit code.');
         }
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
   };
 
-  // Toggle Favourites
+  // Toggle Favourites with Duplicate Prevention & Undo Capability
   const toggleFavorite = (code: string) => {
     if (!code || !/^\d{5}$/.test(code)) return;
+    const isFav = favorites.includes(code);
+    const stopInfo = getStopDisplay(code);
+
+    if (isFav) {
+      // Remove from favorites and provide undo
+      setFavorites((prev) => {
+        const next = prev.filter((c) => c !== code);
+        try {
+          localStorage.setItem('paws_fav_stops', JSON.stringify(next));
+        } catch {
+          // ignore localStorage error
+        }
+        return next;
+      });
+
+      if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+      setUndoRemoval({ code, name: stopInfo.name });
+      undoTimeoutRef.current = setTimeout(() => {
+        setUndoRemoval(null);
+      }, 6000);
+    } else {
+      // Add to favorites (strictly unique)
+      setFavorites((prev) => {
+        const next = Array.from(new Set([...prev, code]));
+        try {
+          localStorage.setItem('paws_fav_stops', JSON.stringify(next));
+        } catch {
+          // ignore localStorage error
+        }
+        return next;
+      });
+      if (undoRemoval?.code === code) {
+        setUndoRemoval(null);
+      }
+    }
+  };
+
+  const handleUndoRemoval = () => {
+    if (!undoRemoval) return;
+    const code = undoRemoval.code;
     setFavorites((prev) => {
-      const next = prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code];
+      const next = Array.from(new Set([...prev, code]));
       try {
         localStorage.setItem('paws_fav_stops', JSON.stringify(next));
       } catch {
-        // ignore local storage errors
+        // ignore localStorage error
       }
       return next;
     });
+    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    setUndoRemoval(null);
   };
 
   // Derive plain advice from the actual forecast string
@@ -354,6 +503,32 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     }
     return false;
   };
+
+  // Active searched stop details
+  const currentStopDisplay = routeResult
+    ? getStopDisplay(routeResult.from, routeResult.fromDescription, routeResult.fromRoadName)
+    : null;
+
+  // Real-time input validation message
+  const getInputValidationNote = () => {
+    if (stopCodeInput.length === 0) {
+      return { text: 'Singapore stop codes are 5 digits and leading zeroes count (e.g. 04121).', type: 'info' };
+    }
+    if (stopCodeInput.length < 5) {
+      const remaining = 5 - stopCodeInput.length;
+      return {
+        text: `5 digits required — enter ${remaining} more digit${remaining > 1 ? 's' : ''}.`,
+        type: 'warning'
+      };
+    }
+    const known = KNOWN_STOP_NAMES[stopCodeInput];
+    if (known) {
+      return { text: `✓ Ready to search: ${known.name}`, type: 'success' };
+    }
+    return { text: '✓ Valid 5-digit format ready to search', type: 'success' };
+  };
+
+  const validationNote = getInputValidationNote();
 
   return (
     <section
@@ -481,7 +656,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
               {/* Status indicators */}
               <div className="flex items-center gap-2">
                 {justRefreshed ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-emerald-500 text-white shadow-xs transition-all">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-emerald-600 text-white shadow-xs transition-all">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Updated just now
                   </span>
@@ -518,7 +693,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                     : 'bg-rose-50 border border-rose-200 text-rose-900'
                 }`}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-1">
                   {locationStatus === 'locating' && (
                     <RefreshCw className="w-4 h-4 animate-spin text-amber-600 shrink-0" />
                   )}
@@ -528,13 +703,13 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   {locationStatus === 'error' && (
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                   )}
-                  <span className="font-medium">{locationMessage}</span>
+                  <span className="font-medium leading-tight">{locationMessage}</span>
                 </div>
                 {locationStatus !== 'locating' && (
                   <button
                     type="button"
                     onClick={() => setLocationStatus('idle')}
-                    className="text-warmgray-400 hover:text-warmgray-700 text-xs px-1 font-bold"
+                    className="text-warmgray-400 hover:text-warmgray-700 text-xs px-1 font-bold shrink-0"
                     aria-label="Dismiss location message"
                   >
                     ✕
@@ -543,7 +718,24 @@ export const ShelterVisitPlanningSection: React.FC = () => {
               </div>
             )}
 
-            {/* Stop code input form with Location Button */}
+            {/* Undo Removal Notification (Error Prevention: Allows quick recovery without modal dialogs) */}
+            {undoRemoval && (
+              <div className="p-3 rounded-2xl bg-warmgray-900 text-white text-xs sm:text-sm flex items-center justify-between gap-3 shadow-md animate-in fade-in slide-in-from-top-1 duration-200">
+                <span className="leading-snug truncate">
+                  Removed <strong>{undoRemoval.name}</strong> from favourites
+                </span>
+                <button
+                  type="button"
+                  onClick={handleUndoRemoval}
+                  className="px-2.5 py-1 rounded-lg bg-terracotta-500 hover:bg-terracotta-600 text-white font-bold text-xs flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Undo</span>
+                </button>
+              </div>
+            )}
+
+            {/* Stop code input form with Error Prevention (Strict 5-digit validation, Clear action, Disabled state) */}
             <form onSubmit={handleSearchRoutes} className="space-y-3">
               <div className="flex items-center justify-between">
                 <label htmlFor="bus-stop-code-hero-input" className="block text-sm font-bold text-warmgray-800">
@@ -568,71 +760,235 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   <input
                     id="bus-stop-code-hero-input"
                     type="text"
+                    inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={5}
                     value={stopCodeInput}
-                    onChange={(e) => setStopCodeInput(e.target.value)}
+                    onChange={handleInputChange}
                     placeholder="e.g. 04121"
                     aria-describedby="stop-code-instruction-note"
-                    className="w-full h-12 sm:h-14 pl-4 pr-10 rounded-2xl border-2 border-[#D6CBC0] bg-[#FAF8F5] text-base sm:text-lg text-warmgray-900 placeholder:text-warmgray-400 focus:outline-none focus:ring-2 focus:ring-terracotta-500 font-mono tracking-widest shadow-inner"
+                    className="w-full h-12 sm:h-14 pl-4 pr-16 rounded-2xl border-2 border-[#D6CBC0] bg-[#FAF8F5] text-base sm:text-lg text-warmgray-900 placeholder:text-warmgray-400 focus:outline-none focus:ring-2 focus:ring-terracotta-500 font-mono tracking-widest shadow-inner"
                   />
-                  {stopCodeInput && /^\d{5}$/.test(stopCodeInput.trim()) && (
-                    <button
-                      type="button"
-                      onClick={() => toggleFavorite(stopCodeInput.trim())}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-warmgray-400 hover:text-amber-500 transition-colors"
-                      title={favorites.includes(stopCodeInput.trim()) ? 'Remove from saved' : 'Save as favourite stop'}
-                    >
-                      <Star
-                        className={`w-5 h-5 ${
-                          favorites.includes(stopCodeInput.trim())
-                            ? 'fill-amber-400 text-amber-500'
-                            : 'text-warmgray-300'
-                        }`}
-                      />
-                    </button>
-                  )}
+
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    {/* Clear Button */}
+                    {stopCodeInput.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearInput}
+                        className="p-1 rounded-full text-warmgray-400 hover:text-warmgray-700 transition-colors focus:outline-none"
+                        title="Clear input"
+                        aria-label="Clear stop code"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+
+                    {/* Favourite Star Toggle for Active Input */}
+                    {stopCodeInput.length === 5 && (
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(stopCodeInput)}
+                        className="p-1 text-warmgray-400 hover:text-amber-500 transition-colors focus:outline-none"
+                        title={
+                          favorites.includes(stopCodeInput)
+                            ? 'Saved to favourites (tap to remove)'
+                            : 'Save as favourite stop'
+                        }
+                        aria-label={
+                          favorites.includes(stopCodeInput)
+                            ? 'Remove from favourite stops'
+                            : 'Save as favourite stop'
+                        }
+                      >
+                        <Star
+                          className={`w-5 h-5 ${
+                            favorites.includes(stopCodeInput)
+                              ? 'fill-amber-400 text-amber-500'
+                              : 'text-warmgray-300'
+                          }`}
+                        />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
+                {/* Primary Search Button: Disabled if invalid length or currently loading */}
                 <button
                   id="btn-search-shelter-routes"
                   type="submit"
-                  disabled={routesLoading || isRefreshing}
-                  className="h-12 sm:h-14 px-5 sm:px-7 rounded-2xl bg-terracotta-500 hover:bg-terracotta-600 active:bg-terracotta-700 text-white font-bold text-sm sm:text-base transition-colors shadow-sm flex items-center gap-2 shrink-0 disabled:opacity-60"
+                  disabled={routesLoading || isRefreshing || stopCodeInput.trim().length !== 5}
+                  className="h-12 sm:h-14 px-5 sm:px-7 rounded-2xl bg-terracotta-500 hover:bg-terracotta-600 active:bg-terracotta-700 text-white font-bold text-sm sm:text-base transition-colors shadow-sm flex items-center gap-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Search className="w-5 h-5" />
                   <span>Search</span>
                 </button>
               </div>
 
-              {/* Quick Transit Stop Pills */}
-              <div className="pt-1 flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="text-warmgray-400 font-medium flex items-center gap-1 mr-1">
-                  <Radio className="w-3 h-3" /> Quick stops:
+              {/* Real-time Inline Validation Note (Error Prevention) */}
+              <div className="flex items-center justify-between text-xs">
+                <p
+                  id="stop-code-instruction-note"
+                  className={`font-medium transition-colors ${
+                    validationNote.type === 'warning'
+                      ? 'text-amber-700'
+                      : validationNote.type === 'success'
+                      ? 'text-emerald-700'
+                      : 'text-warmgray-500'
+                  }`}
+                >
+                  {validationNote.text}
+                </p>
+                <span className="font-mono text-warmgray-400 text-[11px]">
+                  {stopCodeInput.length}/5 digits
                 </span>
-                {POPULAR_QUICK_STOPS.map((qs) => (
-                  <button
-                    key={qs.code}
-                    type="button"
-                    onClick={() => handleSelectQuickStop(qs.code)}
-                    className={`px-2.5 py-1 rounded-full font-medium transition-colors border ${
-                      stopCodeInput === qs.code
-                        ? 'bg-terracotta-50 border-terracotta-400 text-terracotta-800 font-bold'
-                        : 'bg-[#FAF8F5] border-[#E5DDD4] text-warmgray-600 hover:bg-warmgray-100 hover:text-warmgray-900'
-                    }`}
-                  >
-                    {qs.name} <span className="font-mono text-[10px] text-warmgray-400">({qs.code})</span>
-                  </button>
-                ))}
               </div>
 
-              <p id="stop-code-instruction-note" className="text-xs text-warmgray-500 leading-relaxed">
-                Note: A Singapore stop code is 5 digits and the leading zero counts, so <strong>04121</strong> not 4121.
-              </p>
+              {/* RECOGNITION RATHER THAN RECALL: Segmented Navigation for Quick Stops, Favourites, and Recent */}
+              <div className="pt-2 space-y-2">
+                <div className="flex items-center gap-1 border-b border-[#EDE6DF] pb-1.5 text-xs font-semibold text-warmgray-500">
+                  <button
+                    type="button"
+                    onClick={() => setStopsCategory('quick')}
+                    className={`px-2.5 py-1 rounded-lg transition-colors ${
+                      stopsCategory === 'quick'
+                        ? 'bg-warmgray-200/80 text-warmgray-900 font-bold'
+                        : 'text-warmgray-500 hover:text-warmgray-800'
+                    }`}
+                  >
+                    Quick Stops
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStopsCategory('favorites')}
+                    className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 ${
+                      stopsCategory === 'favorites'
+                        ? 'bg-amber-100/90 text-amber-900 font-bold'
+                        : 'text-warmgray-500 hover:text-warmgray-800'
+                    }`}
+                  >
+                    <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                    <span>Favourites ({favorites.length})</span>
+                  </button>
+
+                  {recentStops.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setStopsCategory('recent')}
+                      className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 ${
+                        stopsCategory === 'recent'
+                          ? 'bg-warmgray-200/80 text-warmgray-900 font-bold'
+                          : 'text-warmgray-500 hover:text-warmgray-800'
+                      }`}
+                    >
+                      <Clock className="w-3 h-3 text-warmgray-500" />
+                      <span>Recent ({recentStops.length})</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Category 1: Quick Transit Interchanges */}
+                {stopsCategory === 'quick' && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    {POPULAR_QUICK_STOPS.map((qs) => {
+                      const isSelected = stopCodeInput === qs.code || routeResult?.from === qs.code;
+                      return (
+                        <button
+                          key={qs.code}
+                          type="button"
+                          onClick={() => handleSelectQuickStop(qs.code)}
+                          disabled={routesLoading || isRefreshing}
+                          className={`px-3 py-1.5 rounded-xl font-medium transition-all border flex items-center gap-1.5 disabled:opacity-50 ${
+                            isSelected
+                              ? 'bg-terracotta-100 border-terracotta-500 text-terracotta-900 font-bold ring-2 ring-terracotta-400/30'
+                              : 'bg-[#FAF8F5] border-[#E5DDD4] text-warmgray-700 hover:bg-warmgray-100 hover:text-warmgray-900'
+                          }`}
+                        >
+                          <span className="font-bold">{qs.name}</span>
+                          <span className="font-mono text-[11px] opacity-70">({qs.code})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Category 2: Favourites */}
+                {stopsCategory === 'favorites' && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    {favorites.length === 0 ? (
+                      <p className="text-xs text-warmgray-400 italic py-1">
+                        No saved favourite stops yet. Tap the star icon beside any stop code to save it here.
+                      </p>
+                    ) : (
+                      favorites.map((favCode) => {
+                        const display = getStopDisplay(favCode);
+                        const isSelected = stopCodeInput === favCode || routeResult?.from === favCode;
+                        return (
+                          <div
+                            key={favCode}
+                            className={`inline-flex items-center rounded-xl border transition-all ${
+                              isSelected
+                                ? 'bg-amber-50 border-amber-400 text-amber-950 font-bold ring-2 ring-amber-300/40'
+                                : 'bg-[#FAF8F5] border-[#E5DDD4] text-warmgray-800'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectQuickStop(favCode)}
+                              disabled={routesLoading || isRefreshing}
+                              className="px-3 py-1.5 flex items-center gap-1.5 text-left disabled:opacity-50"
+                            >
+                              <Star className="w-3 h-3 fill-amber-400 text-amber-500 shrink-0" />
+                              <span className="font-bold">{display.name}</span>
+                              <span className="font-mono text-[11px] opacity-70">({favCode})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleFavorite(favCode)}
+                              className="px-2 py-1.5 text-warmgray-400 hover:text-rose-600 transition-colors border-l border-[#E5DDD4]"
+                              title={`Remove ${display.name} from favourites`}
+                              aria-label={`Remove ${display.name} from favourites`}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                {/* Category 3: Recent Searches */}
+                {stopsCategory === 'recent' && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    {recentStops.map((recCode) => {
+                      const display = getStopDisplay(recCode);
+                      const isSelected = stopCodeInput === recCode || routeResult?.from === recCode;
+                      return (
+                        <button
+                          key={recCode}
+                          type="button"
+                          onClick={() => handleSelectQuickStop(recCode)}
+                          disabled={routesLoading || isRefreshing}
+                          className={`px-3 py-1.5 rounded-xl font-medium transition-all border flex items-center gap-1.5 disabled:opacity-50 ${
+                            isSelected
+                              ? 'bg-warmgray-200 border-warmgray-400 text-warmgray-900 font-bold ring-2 ring-warmgray-300/40'
+                              : 'bg-[#FAF8F5] border-[#E5DDD4] text-warmgray-700 hover:bg-warmgray-100 hover:text-warmgray-900'
+                          }`}
+                        >
+                          <Clock className="w-3 h-3 text-warmgray-400 shrink-0" />
+                          <span className="font-bold">{display.name}</span>
+                          <span className="font-mono text-[11px] opacity-70">({recCode})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </form>
 
-            {/* SKELETON LOADING STATE: Nielsen Heuristic #1 Visibility of System Status
-                Shows active retrieval with skeleton layout and exact cold-start note */}
+            {/* SKELETON LOADING STATE: Nielsen Heuristic #1 Visibility of System Status */}
             {routesLoading && (
               <div id="routes-loading-state" className="space-y-3 pt-2">
                 <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 space-y-1 text-xs sm:text-sm">
@@ -698,30 +1054,75 @@ export const ShelterVisitPlanningSection: React.FC = () => {
             {/* RESULTS VIEW */}
             {routeResult && !routesLoading && (
               <div id="route-results-container" className="space-y-4 pt-2">
-                {/* Results Header: Stop name/code and Refresh Button */}
-                <div className="flex items-center justify-between pb-1 border-b border-[#F2EDE8]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-warmgray-500">
-                      From Stop: <strong className="font-mono text-warmgray-900">{routeResult.from}</strong>
-                    </span>
-                    {favorites.includes(routeResult.from) && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                        ★ Saved
-                      </span>
-                    )}
+                {/* PROMINENT STOP RECOGNITION CARD: Bus stop name made more prominent than code */}
+                <div className="p-4 rounded-2xl bg-[#FAF8F5] border border-[#DDD2C6] space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#EFE8E0]">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Bus stop name is prominent */}
+                        <h4 className="text-base sm:text-lg font-extrabold text-warmgray-900">
+                          {currentStopDisplay?.name || `Bus Stop ${routeResult.from}`}
+                        </h4>
+                        {/* Bus stop code as secondary badge */}
+                        <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-md bg-warmgray-200/80 text-warmgray-800">
+                          #{routeResult.from}
+                        </span>
+                      </div>
+                      {currentStopDisplay?.roadInfo && (
+                        <p className="text-xs text-warmgray-500 font-medium mt-0.5">
+                          {currentStopDisplay.roadInfo}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Actions: Refresh & Favourite */}
+                    <div className="flex items-center gap-2 self-start sm:self-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(routeResult.from)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold border transition-colors ${
+                          favorites.includes(routeResult.from)
+                            ? 'bg-amber-50 border-amber-300 text-amber-900'
+                            : 'bg-white border-[#D6CBC0] text-warmgray-700 hover:bg-warmgray-100'
+                        }`}
+                        title={
+                          favorites.includes(routeResult.from)
+                            ? 'Remove from favourites'
+                            : 'Save as favourite stop'
+                        }
+                      >
+                        <Star
+                          className={`w-3.5 h-3.5 ${
+                            favorites.includes(routeResult.from)
+                              ? 'fill-amber-400 text-amber-500'
+                              : 'text-warmgray-400'
+                          }`}
+                        />
+                        <span>{favorites.includes(routeResult.from) ? 'Saved' : 'Save'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => performSearch(routeResult.from, true)}
+                        disabled={isRefreshing}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold bg-terracotta-50 hover:bg-terracotta-100 text-terracotta-700 border border-terracotta-200 active:bg-terracotta-200 disabled:opacity-60 transition-colors focus:outline-none"
+                        title="Refresh live bus arrivals"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Refresh arrivals action */}
-                  <button
-                    type="button"
-                    onClick={() => performSearch(routeResult.from, true)}
-                    disabled={isRefreshing}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-terracotta-600 hover:text-terracotta-700 active:text-terracotta-800 disabled:opacity-60 transition-colors focus:outline-none"
-                    title="Refresh live bus arrival minutes"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-                    <span>{isRefreshing ? 'Refreshing...' : 'Refresh arrivals'}</span>
-                  </button>
+                  {/* Destination Guidance */}
+                  <div className="flex items-center gap-1.5 text-xs text-warmgray-600 font-medium">
+                    <span>Route towards:</span>
+                    <strong className="text-warmgray-900 font-bold flex items-center gap-1">
+                      Pasir Ris Interchange (77009)
+                      <ArrowRight className="w-3 h-3 text-terracotta-500 inline" />
+                    </strong>
+                    <span className="text-warmgray-400">Shelter Hub</span>
+                  </div>
                 </div>
 
                 {/* NO BUSES CURRENTLY OPERATING (e.g. late night) */}

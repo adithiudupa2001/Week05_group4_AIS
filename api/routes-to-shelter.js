@@ -169,6 +169,10 @@ export default async function handler(req, res) {
     });
   }
 
+  const fromStopInfo = stops.get(fromStop);
+  const fromDescription = fromStopInfo?.Description ? String(fromStopInfo.Description).trim() : '';
+  const fromRoadName = fromStopInfo?.RoadName ? String(fromStopInfo.RoadName).trim() : '';
+
   // 1. DIRECT SEARCH
   // Find all services where fromStop and 77009 appear on the same ServiceNo and Direction,
   // AND fromStop's StopSequence is LOWER than 77009's
@@ -287,7 +291,10 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=40');
     return res.status(200).json({
       from: fromStop,
+      fromDescription,
+      fromRoadName,
       destination: destinationStop,
+      destinationDescription: 'Pasir Ris Int',
       type: 'direct',
       services: matchingServices,
       directServices: matchingServices,
@@ -452,7 +459,10 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=40');
     return res.status(200).json({
       from: fromStop,
+      fromDescription,
+      fromRoadName,
       destination: destinationStop,
+      destinationDescription: 'Pasir Ris Int',
       type: 'one_change',
       services: [],
       directServices: [],
@@ -466,7 +476,10 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=40');
   return res.status(200).json({
     from: fromStop,
+    fromDescription,
+    fromRoadName,
     destination: destinationStop,
+    destinationDescription: 'Pasir Ris Int',
     type: 'none',
     services: [],
     directServices: [],
