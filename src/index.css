@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  --color-terracotta-50: #FDF8F6;
+  --color-terracotta-100: #F2E8E5;
+  --color-terracotta-200: #EADDD7;
+  --color-terracotta-300: #DFBAAB;
+  --color-terracotta-400: #D97757;
+  --color-terracotta-500: #C85A32;
+  --color-terracotta-600: #B04B26;
+  --color-terracotta-700: #8E391B;
+
+  --color-warmgray-50: #FAF8F5;
+  --color-warmgray-100: #F4EFEB;
+  --color-warmgray-200: #E8E1DA;
+  --color-warmgray-300: #D6CBC0;
+  --color-warmgray-400: #A89D93;
+  --color-warmgray-500: #8A8077;
+  --color-warmgray-600: #6B625B;
+  --color-warmgray-700: #534B45;
+  --color-warmgray-800: #38322E;
+  --color-warmgray-900: #231F1C;
+}
+
+body {
+  background-color: #FAF7F2;
+  color: #38322E;
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.badge-soft-green {
+  background-color: #E8F5EB;
+  color: #1E6B37;
+  border: 1px solid #C4E7CB;
+}
+
+.badge-soft-orange {
+  background-color: #FFF3EB;
+  color: #B04B26;
+  border: 1px solid #FCE1D1;
+}
+
+.tap-scale {
+  transition: transform 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tap-scale:active {
+  transform: scale(0.98);
+}

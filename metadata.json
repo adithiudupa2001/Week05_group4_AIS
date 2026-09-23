@@ -1,0 +1,6 @@
+{
+  "name": "Paws & Home SG",
+  "description": "Singapore Stray Adoption & Aftercare student project platform for shelter visits, pet adoption matching, and transit info.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
