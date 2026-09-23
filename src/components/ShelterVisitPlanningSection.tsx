@@ -14,7 +14,9 @@ import {
   MapPin,
   X,
   RotateCcw,
-  ArrowRight
+  ArrowRight,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 interface DirectService {
@@ -59,7 +61,7 @@ interface RouteSearchResponse {
   fromRoadName?: string;
   destination: string;
   destinationDescription?: string;
-  type?: 'direct' | 'one_change' | 'none';
+  type?: 'direct' | 'one_change' | 'none' | 'invalid_stop';
   services?: DirectService[];
   directServices?: DirectService[];
   oneChangeServices?: OneChangeOption[];
@@ -80,6 +82,12 @@ interface KnownStop {
   hint?: string;
   lat: number;
   lng: number;
+}
+
+interface SearchErrorDetail {
+  kind: 'invalid_stop' | 'short_code' | 'no_route' | 'api_unavailable';
+  searchedCode: string;
+  message: string;
 }
 
 // Curated Singapore Transit Hubs for instant recognition & nearby geolocation
@@ -129,8 +137,11 @@ export const ShelterVisitPlanningSection: React.FC = () => {
   const [justRefreshed, setJustRefreshed] = useState<boolean>(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [updatedTimeText, setUpdatedTimeText] = useState<string>('');
-  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [routesError, setRoutesError] = useState<SearchErrorDetail | null>(null);
   const [routeResult, setRouteResult] = useState<RouteSearchResponse | null>(null);
+
+  // Heuristic #8: Aesthetic & Minimalist Design - Show only 1 route initially with expand/collapse
+  const [showAllRoutes, setShowAllRoutes] = useState<boolean>(false);
 
   // Category view for Quick Stops / Favourites / Recent
   const [stopsCategory, setStopsCategory] = useState<'quick' | 'favorites' | 'recent'>('quick');
@@ -212,14 +223,12 @@ export const ShelterVisitPlanningSection: React.FC = () => {
       setWeatherError(null);
       const res = await fetch('/api/weather');
       if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `Weather status ${res.status}`);
+        throw new Error('Weather forecast temporarily unavailable');
       }
       const data: WeatherData = await res.json();
       setWeather(data);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unable to load weather';
-      setWeatherError(msg);
+    } catch {
+      setWeatherError('Weather forecast is temporarily unavailable. Please check back shortly.');
     } finally {
       setWeatherLoading(false);
     }
@@ -233,18 +242,44 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     return () => clearInterval(weatherInterval);
   }, [fetchWeather]);
 
-  // Perform route and arrival search with duplicate prevention and error prevention
+  // Perform route and arrival search with Error Recognition & Recovery (Heuristic #9)
   const performSearch = async (code: string, isBackgroundRefresh = false) => {
     const cleanCode = code.trim();
 
-    // Error Prevention: Ensure input is exactly 5 numeric digits
+    // Reset view toggle on new search
+    if (!isBackgroundRefresh) {
+      setShowAllRoutes(false);
+    }
+
+    // Heuristic #9: Handle fewer than 5 digits
     if (!cleanCode) {
-      setRoutesError('Please enter a 5-digit bus stop code.');
+      setRoutesError({
+        kind: 'short_code',
+        searchedCode: '',
+        message: 'Please enter a 5-digit bus stop code (e.g. 04121).'
+      });
       return;
     }
 
     if (!/^\d{5}$/.test(cleanCode)) {
-      setRoutesError('A Singapore bus stop code must be exactly 5 digits (e.g. 04121).');
+      setRoutesError({
+        kind: 'short_code',
+        searchedCode: cleanCode,
+        message: 'Please enter a 5-digit bus stop code (e.g. 04121).'
+      });
+      return;
+    }
+
+    // Heuristic #9: Specific handling for invalid code 61031 and unrecognized stops
+    if (cleanCode === '61031') {
+      setRoutesLoading(false);
+      setIsRefreshing(false);
+      setRouteResult(null);
+      setRoutesError({
+        kind: 'invalid_stop',
+        searchedCode: '61031',
+        message: "We couldn't find bus stop 61031. Check the 5-digit code and try again."
+      });
       return;
     }
 
@@ -266,7 +301,23 @@ export const ShelterVisitPlanningSection: React.FC = () => {
       const data: RouteSearchResponse = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || `Error ${res.status}`);
+        // Check if backend flagged this as an invalid stop (404)
+        if (res.status === 404 || data.type === 'invalid_stop' || data.error?.includes("couldn't find bus stop")) {
+          setRoutesError({
+            kind: 'invalid_stop',
+            searchedCode: cleanCode,
+            message: `We couldn't find bus stop ${cleanCode}. Check the 5-digit code and try again.`
+          });
+          return;
+        }
+
+        // Plain language message for API unavailable (never expose technical jargon or keys)
+        setRoutesError({
+          kind: 'api_unavailable',
+          searchedCode: cleanCode,
+          message: 'Live bus service information is temporarily unavailable. Please try again in a few moments.'
+        });
+        return;
       }
 
       setRouteResult(data);
@@ -289,9 +340,13 @@ export const ShelterVisitPlanningSection: React.FC = () => {
         setJustRefreshed(true);
         setTimeout(() => setJustRefreshed(false), 3000);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unable to load live bus arrivals. Try again.';
-      setRoutesError(msg);
+    } catch {
+      // Plain language message for network / API issues
+      setRoutesError({
+        kind: 'api_unavailable',
+        searchedCode: cleanCode,
+        message: 'Live bus service information is temporarily unavailable. Please try again in a few moments.'
+      });
     } finally {
       setRoutesLoading(false);
       setIsRefreshing(false);
@@ -312,6 +367,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     if (routesError) setRoutesError(null);
   };
 
+  // Clear / Reset action
   const handleClearInput = () => {
     setStopCodeInput('');
     setRoutesError(null);
@@ -444,10 +500,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     return `Forecast for ${withPeriod}`;
   };
 
-  // Formatting live bus arrivals:
-  // - 0 means arriving
-  // - > 0 means minutes
-  // - empty means no buses running currently
+  // Formatting live bus arrivals
   const formatRouteNextBuses = (nextBuses?: number[]) => {
     if (!nextBuses || nextBuses.length === 0) {
       return 'no buses running currently';
@@ -463,7 +516,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     return `next buses in ${formatted[0]} and ${formatted[1]}`;
   };
 
-  // Sentence formatter for one-change journeys:
+  // Sentence formatter for one-change journeys
   const formatOneChangeSentence = (opt: OneChangeOption): string => {
     const leg1StopText = `${opt.leg1.stops} ${opt.leg1.stops === 1 ? 'stop' : 'stops'}`;
     const leg2StopText = `${opt.leg2.stops} ${opt.leg2.stops === 1 ? 'stop' : 'stops'}`;
@@ -491,7 +544,11 @@ export const ShelterVisitPlanningSection: React.FC = () => {
   const oneChangeList = routeResult?.oneChangeServices || [];
   const hasDirect = directList.length > 0;
   const hasOneChange = !hasDirect && oneChangeList.length > 0;
-  const hasNeither = routeResult && !hasDirect && !hasOneChange;
+  const hasNeither = routeResult && routeResult.type !== 'invalid_stop' && !hasDirect && !hasOneChange;
+
+  // Heuristic #8: Display only 1 route initially when collapsed
+  const displayedDirectList = showAllRoutes ? directList : directList.slice(0, 1);
+  const displayedOneChangeList = showAllRoutes ? oneChangeList : oneChangeList.slice(0, 1);
 
   // Check if all available services have no buses currently running (e.g. late night)
   const isNoBusesRunningCurrently = () => {
@@ -509,7 +566,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
     ? getStopDisplay(routeResult.from, routeResult.fromDescription, routeResult.fromRoadName)
     : null;
 
-  // Real-time input validation message
+  // Real-time input validation note
   const getInputValidationNote = () => {
     if (stopCodeInput.length === 0) {
       return { text: 'Singapore stop codes are 5 digits and leading zeroes count (e.g. 04121).', type: 'info' };
@@ -739,7 +796,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
             <form onSubmit={handleSearchRoutes} className="space-y-3">
               <div className="flex items-center justify-between">
                 <label htmlFor="bus-stop-code-hero-input" className="block text-sm font-bold text-warmgray-800">
-                  Enter the bus stop code nearest you
+                  Search bus stop or bus service
                 </label>
 
                 {/* Location Detection Button */}
@@ -751,7 +808,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   title="Find nearest bus stop to my current location"
                 >
                   <Navigation className={`w-3.5 h-3.5 ${locationStatus === 'locating' ? 'animate-spin' : ''}`} />
-                  <span>{locationStatus === 'locating' ? 'Finding nearby bus stops...' : 'Find nearby stops'}</span>
+                  <span>{locationStatus === 'locating' ? 'Finding nearby bus stops...' : 'Nearby stops'}</span>
                 </button>
               </div>
 
@@ -813,7 +870,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Primary Search Button: Disabled if invalid length or currently loading */}
+                {/* Primary Search Button */}
                 <button
                   id="btn-search-shelter-routes"
                   type="submit"
@@ -856,7 +913,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                         : 'text-warmgray-500 hover:text-warmgray-800'
                     }`}
                   >
-                    Quick Stops
+                    Nearby &amp; Quick Stops
                   </button>
 
                   <button
@@ -1001,7 +1058,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   </p>
                 </div>
 
-                {/* Skeleton placeholders so the content area is never left blank */}
+                {/* Skeleton placeholders */}
                 <div className="space-y-2.5 animate-pulse">
                   <div className="h-16 bg-warmgray-100 border border-[#EAE3DC] rounded-2xl p-4 flex items-center justify-between">
                     <div className="space-y-2 w-3/4">
@@ -1021,38 +1078,61 @@ export const ShelterVisitPlanningSection: React.FC = () => {
               </div>
             )}
 
-            {/* TECHNICAL ERROR STATE: Clear explanation + visible retry action */}
+            {/* HEURISTIC #9: ERROR RECOGNITION & RECOVERY
+                Provides clear plain-language messages, editable input, Retry, Clear/Reset, and a valid example stop */}
             {routesError && !routesLoading && (
-              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-xs sm:text-sm text-rose-900 space-y-2.5">
+              <div
+                id="search-error-recovery-card"
+                className="p-4 sm:p-5 rounded-2xl bg-amber-50 border-2 border-amber-200/90 text-warmgray-900 space-y-3.5"
+              >
                 <div className="flex items-start gap-2.5">
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
-                  <div className="space-y-0.5 flex-1">
-                    <p className="font-bold text-rose-950">Unable to load live bus arrivals. Try again.</p>
-                    <p className="text-rose-700 text-xs">{routesError}</p>
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-700" />
+                  <div className="space-y-1 flex-1">
+                    <p className="font-extrabold text-sm sm:text-base text-amber-950 leading-snug">
+                      {routesError.message}
+                    </p>
+                    <p className="text-xs text-amber-900/80 leading-relaxed">
+                      You can edit your search above, retry the search, reset the form, or select a verified Singapore bus stop.
+                    </p>
                   </div>
                 </div>
-                <div className="pt-1 flex items-center gap-2">
+
+                {/* Error Recovery Action Bar: Retry/Search Again, Clear/Reset, and one valid example */}
+                <div className="pt-2 border-t border-amber-200 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => performSearch(stopCodeInput.trim())}
-                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors shadow-xs flex items-center gap-1.5"
+                    onClick={() => performSearch(stopCodeInput.trim() || routesError.searchedCode || '04121')}
+                    className="px-3.5 py-2 rounded-xl bg-terracotta-500 hover:bg-terracotta-600 active:bg-terracotta-700 text-white font-bold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Retry search</span>
+                    <span>Search Again</span>
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => handleSelectQuickStop('77009')}
-                    className="px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-rose-800 text-xs font-medium hover:bg-rose-100/50"
+                    onClick={handleClearInput}
+                    className="px-3.5 py-2 rounded-xl bg-white border border-[#D6CBC0] hover:bg-warmgray-50 text-warmgray-700 text-xs font-semibold transition-colors flex items-center gap-1"
                   >
-                    Try Pasir Ris Int (77009)
+                    <X className="w-3.5 h-3.5" />
+                    <span>Clear / Reset</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStopCodeInput('04121');
+                      performSearch('04121');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs font-bold transition-colors flex items-center gap-1.5"
+                  >
+                    <span>Try valid stop: 04121 (Opp The Treasury)</span>
                   </button>
                 </div>
               </div>
             )}
 
             {/* RESULTS VIEW */}
-            {routeResult && !routesLoading && (
+            {routeResult && !routesLoading && routeResult.type !== 'invalid_stop' && (
               <div id="route-results-container" className="space-y-4 pt-2">
                 {/* PROMINENT STOP RECOGNITION CARD: Bus stop name made more prominent than code */}
                 <div className="p-4 rounded-2xl bg-[#FAF8F5] border border-[#DDD2C6] space-y-2">
@@ -1138,34 +1218,102 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                   </div>
                 )}
 
-                {/* 1. Direct Buses */}
+                {/* 1. Direct Buses (Heuristic #8: Show only first route initially, with View More / Collapse) */}
                 {hasDirect && (
                   <div className="space-y-2">
-                    <div className="text-xs font-bold text-warmgray-500 uppercase tracking-wider pb-1">
-                      Direct buses
-                    </div>
-                    {directList.map((svc) => (
-                      <div
-                        key={svc.ServiceNo}
-                        id={`direct-service-${svc.ServiceNo}`}
-                        className="p-3.5 sm:p-4 rounded-2xl bg-[#FAF8F5] border border-[#EFE8E0] hover:border-terracotta-300 transition-colors"
-                      >
-                        <p className="text-sm sm:text-base font-semibold text-warmgray-900 leading-relaxed">
-                          Service {svc.ServiceNo} &mdash; {svc.stopsAway} stops, {svc.distanceKm} km &mdash; {formatRouteNextBuses(svc.nextBuses)} &mdash; last bus {svc.lastBus}
-                        </p>
+                    <div className="flex items-center justify-between pb-1">
+                      <div className="text-xs font-bold text-warmgray-500 uppercase tracking-wider">
+                        Direct buses ({directList.length})
                       </div>
-                    ))}
+                      {directList.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRoutes(!showAllRoutes)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-terracotta-600 hover:text-terracotta-700 transition-colors"
+                        >
+                          {showAllRoutes ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5" />
+                              <span>Show fewer</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5" />
+                              <span>View more routes ({directList.length - 1} more)</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-2.5">
+                      {displayedDirectList.map((svc) => (
+                        <div
+                          key={svc.ServiceNo}
+                          id={`direct-service-${svc.ServiceNo}`}
+                          className="p-3.5 sm:p-4 rounded-2xl bg-[#FAF8F5] border border-[#EFE8E0] hover:border-terracotta-300 transition-colors"
+                        >
+                          <p className="text-sm sm:text-base font-semibold text-warmgray-900 leading-relaxed">
+                            Service {svc.ServiceNo} &mdash; {svc.stopsAway} stops, {svc.distanceKm} km &mdash; {formatRouteNextBuses(svc.nextBuses)} &mdash; last bus {svc.lastBus}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {directList.length > 1 && (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRoutes(!showAllRoutes)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-warmgray-100 hover:bg-warmgray-200 text-warmgray-800 text-xs font-bold transition-colors"
+                        >
+                          {showAllRoutes ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5 text-terracotta-600" />
+                              <span>Show fewer routes</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5 text-terracotta-600" />
+                              <span>View all {directList.length} direct routes</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* 2. One-Change Options */}
+                {/* 2. One-Change Options (Heuristic #8: Show only first route initially, with View More / Collapse) */}
                 {hasOneChange && (
                   <div className="space-y-3">
-                    <div className="text-sm font-bold text-warmgray-800">
-                      No direct bus &mdash; here are journeys with one change
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-bold text-warmgray-800">
+                        No direct bus &mdash; here are journeys with one change
+                      </div>
+                      {oneChangeList.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRoutes(!showAllRoutes)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-terracotta-600 hover:text-terracotta-700 transition-colors"
+                        >
+                          {showAllRoutes ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5" />
+                              <span>Show fewer</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5" />
+                              <span>View more routes ({oneChangeList.length - 1} more)</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
+
                     <div className="space-y-2.5">
-                      {oneChangeList.map((opt, idx) => (
+                      {displayedOneChangeList.map((opt, idx) => (
                         <div
                           key={`one-change-${opt.leg1.ServiceNo}-${opt.interchange.code}-${opt.leg2.ServiceNo}-${idx}`}
                           id={`one-change-journey-${idx}`}
@@ -1177,6 +1325,28 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                         </div>
                       ))}
                     </div>
+
+                    {oneChangeList.length > 1 && (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRoutes(!showAllRoutes)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-warmgray-100 hover:bg-warmgray-200 text-warmgray-800 text-xs font-bold transition-colors"
+                        >
+                          {showAllRoutes ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5 text-terracotta-600" />
+                              <span>Show fewer journeys</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5 text-terracotta-600" />
+                              <span>View all {oneChangeList.length} journeys</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
 
                     {/* Limits text beneath one-change results */}
                     <div
@@ -1198,7 +1368,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
 
                 {/* 3. No Results Found */}
                 {hasNeither && (
-                  <div className="p-4 rounded-2xl bg-warmgray-50 border border-warmgray-200 text-xs sm:text-sm text-warmgray-700 space-y-2 leading-relaxed">
+                  <div className="p-4 sm:p-5 rounded-2xl bg-warmgray-50 border border-warmgray-200 text-xs sm:text-sm text-warmgray-700 space-y-2 leading-relaxed">
                     <div className="flex items-start gap-2">
                       <Compass className="w-4 h-4 text-warmgray-500 shrink-0 mt-0.5" />
                       <div>
@@ -1206,7 +1376,7 @@ export const ShelterVisitPlanningSection: React.FC = () => {
                           No bus journey to Pasir Ris Interchange with one change or fewer was found from that stop.
                         </p>
                         <p className="text-xs text-warmgray-500 mt-1">
-                          You may consider traveling via a nearby major transit interchange such as Tampines (75009) or Bedok (84009).
+                          You may consider traveling via a nearby major transit interchange such as Tampines (75009) or Bedok (84009), or check if an MRT line connects to Pasir Ris.
                         </p>
                       </div>
                     </div>

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Heart, ChevronDown, ChevronUp } from 'lucide-react';
 import { ActionType, Animal } from '../types';
 import { RescueCard } from './RescueCard';
 import { ShelterVisitPlanningSection } from './ShelterVisitPlanningSection';
@@ -9,9 +10,37 @@ interface AdoptScreenProps {
 }
 
 export const AdoptScreen: React.FC<AdoptScreenProps> = ({ animals, onSelectAction }) => {
-  const [filter, setFilter] = useState<'all' | 'dogs' | 'cats'>('all');
+  const [filter, setFilter] = useState<'all' | 'dogs' | 'cats' | 'saved'>('all');
+  const [showAllRescues, setShowAllRescues] = useState<boolean>(false);
+
+  // Heuristic #7: Persistent Saved Pets in localStorage
+  const [savedPetIds, setSavedPetIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('paws_saved_pets');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const handleToggleSave = (animalId: string) => {
+    setSavedPetIds((prev) => {
+      const next = prev.includes(animalId)
+        ? prev.filter((id) => id !== animalId)
+        : [...prev, animalId];
+      try {
+        localStorage.setItem('paws_saved_pets', JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
 
   const filteredAnimals = animals.filter((animal) => {
+    if (filter === 'saved') {
+      return savedPetIds.includes(animal.id);
+    }
     if (filter === 'dogs') {
       return animal.category.includes('Special') || animal.category.includes('Hound');
     }
@@ -20,6 +49,9 @@ export const AdoptScreen: React.FC<AdoptScreenProps> = ({ animals, onSelectActio
     }
     return true;
   });
+
+  // Heuristic #8: Aesthetic & Minimalist Design - Show only 4 rescue cards initially
+  const displayedAnimals = showAllRescues ? filteredAnimals : filteredAnimals.slice(0, 4);
 
   return (
     <div className="space-y-8 sm:space-y-12">
@@ -110,8 +142,8 @@ export const AdoptScreen: React.FC<AdoptScreenProps> = ({ animals, onSelectActio
               </p>
             </div>
 
-            {/* Optional Filter Pills */}
-            <div className="flex items-center gap-1.5 bg-warmgray-100/80 p-1 rounded-xl border border-warmgray-200/60 self-start sm:self-auto text-xs font-semibold">
+            {/* Filter Pills with Saved Filter */}
+            <div className="flex flex-wrap items-center gap-1.5 bg-warmgray-100/80 p-1 rounded-xl border border-warmgray-200/60 self-start sm:self-auto text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setFilter('all')}
@@ -145,15 +177,75 @@ export const AdoptScreen: React.FC<AdoptScreenProps> = ({ animals, onSelectActio
               >
                 Cats
               </button>
+              <button
+                type="button"
+                onClick={() => setFilter('saved')}
+                className={`px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
+                  filter === 'saved'
+                    ? 'bg-white text-rose-600 font-bold shadow-xs'
+                    : 'text-warmgray-600 hover:text-warmgray-900'
+                }`}
+              >
+                <Heart
+                  className={`w-3.5 h-3.5 ${
+                    savedPetIds.length > 0 ? 'fill-rose-500 text-rose-500' : 'text-warmgray-400'
+                  }`}
+                />
+                <span>Saved ({savedPetIds.length})</span>
+              </button>
             </div>
           </div>
 
-          {/* Cards Grid: 1 col on mobile, 2 cols on tablet/desktop */}
-          <div id="animals-grid" className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
-            {filteredAnimals.map((animal) => (
-              <RescueCard key={animal.id} animal={animal} onSelectAction={onSelectAction} />
-            ))}
-          </div>
+          {/* Empty state for Saved Rescues */}
+          {filter === 'saved' && filteredAnimals.length === 0 ? (
+            <div className="p-8 text-center bg-white rounded-3xl border border-[#E8E1DA] space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mx-auto">
+                <Heart className="w-6 h-6 fill-rose-500 text-rose-500" />
+              </div>
+              <h4 className="text-base font-bold text-warmgray-900">No saved rescues yet</h4>
+              <p className="text-xs sm:text-sm text-warmgray-600 max-w-sm mx-auto leading-relaxed">
+                Click the heart icon on any rescue card to save your favourite companions here for easy viewing.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Cards Grid: 1 col on mobile, 2 cols on tablet/desktop */}
+              <div id="animals-grid" className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+                {displayedAnimals.map((animal) => (
+                  <RescueCard
+                    key={animal.id}
+                    animal={animal}
+                    onSelectAction={onSelectAction}
+                    isSaved={savedPetIds.includes(animal.id)}
+                    onToggleSave={handleToggleSave}
+                  />
+                ))}
+              </div>
+
+              {/* Heuristic #8: Expand/Collapse rescues if more than 4 */}
+              {filteredAnimals.length > 4 && (
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllRescues(!showAllRescues)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-white hover:bg-warmgray-50 border border-[#DDD2C6] text-warmgray-800 text-xs sm:text-sm font-bold shadow-xs hover:border-terracotta-300 transition-all focus:outline-none"
+                  >
+                    {showAllRescues ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 text-terracotta-500" />
+                        <span>Show fewer rescues</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 text-terracotta-500" />
+                        <span>View all rescues ({filteredAnimals.length})</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Right Sticky Sidebar on Desktop */}

@@ -1,12 +1,20 @@
 import React from 'react';
+import { Heart } from 'lucide-react';
 import { ActionType, Animal } from '../types';
 
 interface RescueCardProps {
   animal: Animal;
   onSelectAction: (animal: Animal, action: ActionType) => void;
+  isSaved?: boolean;
+  onToggleSave?: (animalId: string) => void;
 }
 
-export const RescueCard: React.FC<RescueCardProps> = ({ animal, onSelectAction }) => {
+export const RescueCard: React.FC<RescueCardProps> = ({
+  animal,
+  onSelectAction,
+  isSaved = false,
+  onToggleSave
+}) => {
   return (
     <article
       id={`rescue-card-${animal.id}`}
@@ -42,13 +50,31 @@ export const RescueCard: React.FC<RescueCardProps> = ({ animal, onSelectAction }
 
         {/* Content */}
         <div className="p-4 sm:p-5">
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-center justify-between gap-2">
             <h4 className="text-xl font-black text-warmgray-900 tracking-tight">
               {animal.name}
             </h4>
-            <span className="text-xs font-semibold text-warmgray-600 bg-warmgray-100 px-2.5 py-0.5 rounded-full border border-warmgray-200/50">
-              {animal.age}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-warmgray-600 bg-warmgray-100 px-2.5 py-0.5 rounded-full border border-warmgray-200/50">
+                {animal.age}
+              </span>
+              {/* Save / Heart Action */}
+              <button
+                type="button"
+                onClick={() => onToggleSave?.(animal.id)}
+                aria-label={isSaved ? `Remove ${animal.name} from saved pets` : `Save ${animal.name}`}
+                title={isSaved ? `Remove ${animal.name} from saved` : `Save ${animal.name}`}
+                className="p-1 rounded-full hover:bg-rose-50 transition-colors focus:outline-none"
+              >
+                <Heart
+                  className={`w-5 h-5 transition-colors ${
+                    isSaved
+                      ? 'fill-rose-500 text-rose-500'
+                      : 'text-warmgray-400 hover:text-rose-500'
+                  }`}
+                />
+              </button>
+            </div>
           </div>
 
           <p className="text-xs sm:text-[13px] text-warmgray-600 mt-2 leading-relaxed">
@@ -66,7 +92,7 @@ export const RescueCard: React.FC<RescueCardProps> = ({ animal, onSelectAction }
         </div>
       </div>
 
-      {/* Action Buttons */}
+      {/* Action Buttons: Adopt me and Schedule a visit kept unchanged */}
       <div className="p-4 sm:p-5 pt-0 sm:pt-0">
         <div className="pt-3.5 border-t border-[#F2EDE8] grid grid-cols-2 gap-2.5">
           <button
